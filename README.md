@@ -10,13 +10,13 @@ https://www.kaggle.com/datasets/cynthiarempel/amazon-us-customer-reviews-dataset
 
 The Data Set Attributes:
 
-Marketplace
-Customer_id
-Review_id
-Product_id
-Product_parent
-Product_title
-Product_category
-Star_rating
-Helpful_votes
+Marketplace, 
+Customer_id, 
+Review_id, 
+Product_id, 
+Product_parent, 
+Product_title, 
+Product_category, 
+Star_rating, 
+Helpful_votes, 
 Total_votes
