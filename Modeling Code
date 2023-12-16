@@ -1,0 +1,112 @@
+%pip install textblob
+from pyspark.sql.functions import *
+from pyspark.ml.feature import StringIndexer, OneHotEncoder, VectorAssembler
+from pyspark.ml import Pipeline
+from pyspark.ml.classification import LogisticRegression, LogisticRegressionModel
+from pyspark.ml.evaluation import *
+from pyspark.ml.tuning import *
+from pyspark.sql.functions import when
+import numpy as np
+from pyspark.ml.evaluation import BinaryClassificationEvaluator
+from pyspark.ml.feature import IDF
+from pyspark.ml.feature import HashingTF
+from pyspark.ml.feature import Tokenizer, RegexTokenizer
+from pyspark.ml.feature import StopWordsRemover
+from pyspark.sql.types import DoubleType
+from pyspark.sql.functions import col, isnan, when, count, udf, to_date, year, month, date_format, size, split
+from pyspark.ml.stat import Correlation
+from textblob import TextBlob
+
+# Define a function for modeling 
+def model_file(file_path):
+    sdf = spark.read.parquet(file_path)
+# Feature engineering
+    review_Tokenizer = RegexTokenizer(inputCol="clean_review_body", outputCol="clean_review_words", pattern='\\w+', gaps=False)
+    sdf = review_Tokenizer.transform(sdf)
+    review_stop_word_remover = StopWordsRemover(inputCol="clean_review_words", outputCol="clean_review_filtered_words")
+    sdf = review_stop_word_remover.transform(sdf)
+    review_hashingTF = HashingTF(numFeatures=4096, inputCol="clean_review_filtered_words", outputCol="clean_review_hash")
+    sdf = review_hashingTF.transform(sdf)
+    review_idf = IDF(inputCol="clean_review_hash", outputCol="clean_review_features", minDocFreq=1)
+    sdf = review_idf.fit(sdf).transform(sdf)
+
+
+    def sentiment_analysis(text):
+        sentiment_score = TextBlob(text).sentiment.polarity
+        return sentiment_score
+
+
+    sentiment_analysis_udf = udf(sentiment_analysis, DoubleType())
+   
+    sdf = sdf.withColumn("sentiment_score_review", sentiment_analysis_udf(sdf['clean_review_body']))
+    sdf = sdf.withColumn("review_date_numeric", datediff(col("review_date"), to_date(lit("1970-01-01"))))
+    sdf = sdf.withColumn("label", when(sdf["star_rating"] >= 3, 1.0).otherwise(0.0))
+
+
+#StringIndexer, OneHotEncoder and VectorAssembler
+    indexer = StringIndexer(inputCols=["verified_purchase", "product_category"], outputCols=["verified_purchaseIndex", "product_categoryIndex"])
+    encoder = OneHotEncoder(inputCols=["verified_purchaseIndex", "product_categoryIndex"], outputCols=["verified_purchaseVector", "product_categoryVector"], dropLast=False)
+    assembler = VectorAssembler(inputCols=['product_categoryVector', 'verified_purchaseVector', 'helpful_votes', 'total_votes', 'review_date_numeric', 'clean_review_features', 'sentiment_score_review'], outputCol="features")
+
+
+# Build the pipeline
+    amazon_pipeline = Pipeline(stages=[indexer, encoder, assembler])
+    amazon_df = amazon_pipeline.fit(sdf).transform(sdf)
+
+
+    trainingData, testData = amazon_df.randomSplit([0.7, 0.3], seed=42)
+
+
+    lr = LogisticRegression()
+    model = lr.fit(trainingData)
+    print("Coefficients: ", model.coefficients)
+    print("Intercept: ", model.intercept)
+
+
+    grid = ParamGridBuilder() \
+        .addGrid(lr.regParam, [0.0, 0.2, 0.4, 0.6, 0.8, 1.0]) \
+        .addGrid(lr.elasticNetParam, [0, 0.5, 1]) \
+        .build()
+
+
+    evaluator = BinaryClassificationEvaluator(metricName="areaUnderROC")
+    cv = CrossValidator(estimator=lr, estimatorParamMaps=grid, evaluator=evaluator, numFolds=3)
+
+
+    cvModel = cv.fit(trainingData)
+    predictions = cvModel.transform(testData)
+
+
+    auc = evaluator.evaluate(predictions)
+    print(f"AUC: {auc}")
+
+
+    cm = predictions.groupby('label').pivot('prediction').count().fillna(0).collect()
+
+
+# Define a function to calculate accuracy, precision, recall, f1_score
+    def calculate_recall_precision(confusion_matrix):
+        tn, fp, fn, tp = confusion_matrix[0][1], confusion_matrix[0][2], confusion_matrix[1][1], confusion_matrix[1][2]
+        precision = tp / (tp + fp)
+        recall = tp / (tp + fn)
+        accuracy = (tp + tn) / (tp + tn + fp + fn)
+        f1_score = 2 * ((precision * recall) / (precision + recall))
+        return accuracy, precision, recall, f1_score
+
+
+    print("Accuracy, Precision, Recall, F1 Score:", calculate_recall_precision(cm))
+
+
+# Files to run
+files_to_model = [
+    's3a://my-big-data-project-jn/raw/clean_amazon_reviews_us_Apparel_v1_00.parquet',
+    's3a://my-big-data-project-jn/raw/clean_amazon_reviews_us_Automotive_v1_00.parquet',
+    's3a://my-big-data-project-jn/raw/clean_amazon_reviews_us_Camera_v1_00.parquet',
+    's3a://my-big-data-project-jn/raw/clean_amazon_reviews_us_Books_v1_02.parquet'
+]
+
+
+# Process each file
+for file in files_to_model:
+    print(f"Modeling on file: {file}")
+    model_file(file)
