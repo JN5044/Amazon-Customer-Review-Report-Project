@@ -1,0 +1,49 @@
+from pyspark.sql.functions import isnan, when, col, count, udf
+
+
+def clean_file(file_name):
+    file_path = f's3a://my-big-data-project-jn/landing/{file_name}'
+
+
+    sdf = spark.read.csv(file_path, sep='\t', header=True, inferSchema=True)
+    sdf.printSchema()
+
+
+    sdf.select([count(when(isnan(c) | col(c).isNull(), c)).alias(c) for c in ["star_rating", "review_body"]]).show()
+
+
+    sdf = sdf.na.drop(subset=["star_rating", "review_body"])
+
+
+    # Dropping unnecessary columns
+    sdf = sdf.drop(*['marketplace', 'review_id', 'customer_id', 'product_parent'])
+
+
+    def ascii_only(mystring):
+        return mystring.encode('ascii', 'ignore').decode('ascii') if mystring else None
+
+
+    ascii_udf = udf(ascii_only)
+
+
+    # Cleaning the review_body and review_headline
+    sdf = sdf.withColumn("clean_review_headline", ascii_udf('review_headline'))
+    sdf = sdf.withColumn("clean_review_body", ascii_udf('review_body'))
+
+
+    # Write to output
+    output_file_path = f's3://my-big-data-project-jn/raw/clean_{file_name.replace(".tsv", ".parquet")}'
+    sdf.write.parquet(output_file_path)
+
+
+files_to_clean = [
+    'amazon_reviews_us_Apparel_v1_00.tsv',
+    'amazon_reviews_us_Automotive_v1_00.tsv',
+    'amazon_reviews_us_Camera_v1_00.tsv',
+    'amazon_reviews_us_Books_v1_02.tsv'
+]
+
+
+for file in files_to_clean:
+    print(f"Cleaning on file: {file}")
+    clean_file(file)
