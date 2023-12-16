@@ -1,0 +1,70 @@
+%pip install "boto3>=1.28" "s3fs>=2023.3.0"
+%pip install pyarrow fastparquet
+%pip install seaborn
+
+
+import boto3
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+pd.options.display.float_format = '{:.4f}'.format
+
+
+def perform_eda(bucket_name, file_path, file_name):
+    s3 = boto3.client(
+        's3',
+        region_name='us-east-2',
+        aws_access_key_id='AKIATX6SHB4C3PT5IEX7',
+        aws_secret_access_key='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'
+    )
+   
+    obj = s3.get_object(Bucket=bucket_name, Key=f"{file_path}/{file_name}")
+    data = pd.read_csv(obj['Body'], sep='\t', on_bad_lines='skip',low_memory=False)
+
+
+    print(data.head())
+
+
+    # Print the info
+    print("\n Info:")
+    print(data.info())
+
+
+    # Print the statistics
+    print("\n Describe:")
+    print(data.describe())
+
+
+    # Print number of null values
+    print(f"\nNumber of null values:\n{data.isnull().sum().sum()}")
+
+
+    # Review Categories by Star Ratings
+    plt.figure(figsize=(10, 5))
+    sns.barplot(x='star_rating', y='counts', data=data.groupby('star_rating').size().reset_index(name='counts'))
+    plt.title('Review Categories by Star Ratings')
+    plt.xlabel('Star Rating')
+    plt.ylabel('Number of Votes')
+    plt.show()
+
+
+    # Distribution of Verified vs Non-Verified Purchases
+    plt.figure(figsize=(8, 8))
+    data['verified_purchase'].value_counts().plot(kind='pie', autopct='%1.1f%%')
+    plt.title('Verified vs Non-Verified Purchases')
+    plt.ylabel('')
+    plt.show()
+
+
+bucket_name = 'my-big-data-project-jn'
+filename_list = [
+    ('landing', 'amazon_reviews_us_Automotive_v1_00.tsv'),
+    ('landing', 'amazon_reviews_us_Apparel_v1_00.tsv'),
+    ('landing', 'amazon_reviews_us_Camera_v1_00.tsv'),
+    ('landing', 'amazon_reviews_us_Books_v1_02.tsv')
+]
+
+
+for file_path, file_name in filename_list:
+    print(f"Working on file: {file_name}")
+    perform_eda(bucket_name, file_path, file_name)
